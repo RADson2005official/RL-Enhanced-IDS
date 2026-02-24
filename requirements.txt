@@ -1,0 +1,35 @@
+# RL-Enhanced Anomaly-Based IDS - Production Dependencies
+# Core ML & RL
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+torch>=2.0.0
+scikit-learn==1.5.2
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0
+
+# Network Simulation
+networkx>=3.1
+
+# Web Dashboard
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2>=3.1.2
+python-multipart>=0.0.9
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# Configuration & Utilities
+pyyaml>=6.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-json-logger>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+httpx>=0.24.0
+
+# Production
+gunicorn>=21.2.0

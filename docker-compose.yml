@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  # ── Training service ────────────────────────────────────────────
+  rl-ids-train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-ids-train
+    command: python scripts/train.py --algorithm DQN --timesteps 50000
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./config:/app/config
+    environment:
+      - RL_IDS_LOG_LEVEL=INFO
+      - RL_IDS_DASHBOARD_HOST=0.0.0.0
+      - RL_IDS_DASHBOARD_PORT=8050
+    ports:
+      - "8050:8050"
+    networks:
+      - rl-ids-net
+    restart: "no"
+
+  # ── Evaluation service ──────────────────────────────────────────
+  rl-ids-eval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-ids-eval
+    command: python scripts/evaluate.py --episodes 10
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./config:/app/config
+    environment:
+      - RL_IDS_LOG_LEVEL=INFO
+    networks:
+      - rl-ids-net
+    depends_on:
+      - rl-ids-train
+    profiles:
+      - eval
+
+  # ── Dashboard-only service ──────────────────────────────────────
+  rl-ids-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-ids-dashboard
+    command: >
+      python -c " import uvicorn from src.dashboard.app import create_app app = create_app() uvicorn.run(app, host='0.0.0.0', port=8050) "
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./models:/app/models
+      - ./reports:/app/reports
+    environment:
+      - RL_IDS_DASHBOARD_HOST=0.0.0.0
+      - RL_IDS_DASHBOARD_PORT=8050
+    networks:
+      - rl-ids-net
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8050/health')" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - dashboard
+
+  # ── Test runner ─────────────────────────────────────────────────
+  rl-ids-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-ids-test
+    command: python -m pytest tests/ -v --tb=short
+    volumes:
+      - ./config:/app/config
+    networks:
+      - rl-ids-net
+    profiles:
+      - test
+
+networks:
+  rl-ids-net:
+    driver: bridge
