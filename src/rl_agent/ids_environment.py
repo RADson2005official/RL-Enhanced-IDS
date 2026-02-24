@@ -195,7 +195,7 @@ class IDSEnvironment(gym.Env):
             attack_type=attack_type,
         )
 
-        # ── Compute reward ──────────────────────────────────────────
+        # ── Compute reward (multi-objective shaping) ────────────────
         counts = self.alert_manager.get_recent_counts(last_n_steps=1)
         reward = self.reward_calculator.compute(
             tp=counts["TP"],
@@ -203,6 +203,10 @@ class IDSEnvironment(gym.Env):
             tn=counts["TN"],
             fn=counts["FN"],
             current_threshold=self.ids.current_threshold,
+            info={
+                "attack_type": attack_type,
+                "has_attack": has_attack,
+            },
         )
         self._episode_reward += reward
 
@@ -223,6 +227,8 @@ class IDSEnvironment(gym.Env):
             "classification": alert.classification,
             "threshold": self.ids.current_threshold,
             "sensitivity": self.ids.current_sensitivity,
+            "ensemble_agreement": result.ensemble_agreement,
+            "confidence": result.confidence,
             "episode_reward": self._episode_reward,
             "alert_counts": self.alert_manager.get_step_counts(),
         }
