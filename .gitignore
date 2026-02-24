@@ -51,6 +51,7 @@ reports/*.pdf
 docker-compose.override.yml
 
 # ── Misc ────────────────────────────────────────────────────
+CopyRight-G16*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
