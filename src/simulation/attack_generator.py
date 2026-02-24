@@ -1,9 +1,10 @@
 """
 Attack Traffic Generator for the RL-Enhanced IDS Simulation.
 
-Produces parameterized malicious traffic across multiple attack categories:
-port scans, DDoS, C2 beaconing, data exfiltration, lateral movement, and
-DNS tunneling.
+Produces parameterized malicious traffic across 12 attack categories:
+port scans, DDoS (SYN/UDP), C2 beaconing, encrypted C2, data exfiltration,
+slow exfiltration, lateral movement, DNS tunneling, ICMP tunneling,
+polymorphic attacks, and multi-stage coordinated campaigns.
 """
 
 from __future__ import annotations
@@ -34,6 +35,12 @@ class AttackGenerator:
         "data_exfiltration",
         "lateral_movement",
         "dns_tunneling",
+        # ── v2.0 advanced attacks ────────────────────────────────
+        "encrypted_c2",
+        "polymorphic_attack",
+        "slow_exfiltration",
+        "icmp_tunneling",
+        "multi_stage_attack",
     ]
 
     def __init__(
@@ -86,6 +93,11 @@ class AttackGenerator:
             "data_exfiltration": self._data_exfiltration,
             "lateral_movement": self._lateral_movement,
             "dns_tunneling": self._dns_tunneling,
+            "encrypted_c2": self._encrypted_c2,
+            "polymorphic_attack": self._polymorphic_attack,
+            "slow_exfiltration": self._slow_exfiltration,
+            "icmp_tunneling": self._icmp_tunneling,
+            "multi_stage_attack": self._multi_stage_attack,
         }
 
         return dispatch[attack_type](sim_time, intensity, target_device_id, source_device_id)
@@ -324,6 +336,220 @@ class AttackGenerator:
                 attack_type="dns_tunneling",
                 metadata={"encoded_data_size": query_size, "intensity": intensity},
             ))
+        return flows
+
+    # ── Advanced attack implementations (v2.0) ─────────────────────
+
+    def _encrypted_c2(
+        self, sim_time: float, intensity: float,
+        target_id: Optional[str], source_id: Optional[str],
+    ) -> List[TrafficFlow]:
+        """
+        Encrypted C2 beaconing — simulates HTTPS-based C2 channels.
+
+        Hard to detect: uses port 443, realistic TLS payload sizes,
+        and jittered intervals that mimic legitimate browsing.
+        """
+        src = self._pick_source(source_id, DeviceType.WORKSTATION)
+        c2_ip = f"104.{self._rng.randint(16, 31)}.{self._rng.randint(0, 255)}.{self._rng.randint(1, 254)}"
+        num_beacons = int(5 + intensity * 20)
+        base_interval = max(10, 120 * (1 - intensity))
+        flows = []
+        for i in range(num_beacons):
+            self._flow_counter += 1
+            # Jittered interval mimicking legitimate browsing patterns
+            jitter = self._np_rng.exponential(base_interval * 0.3)
+            # TLS-like handshake + encrypted payload
+            tls_overhead = self._rng.choice([517, 573, 609, 660])  # realistic TLS record sizes
+            payload = self._rng.randint(200, 2000)
+            flows.append(TrafficFlow(
+                flow_id=f"ATK{self._flow_counter:08d}",
+                src_ip=src.ip_address,
+                dst_ip=c2_ip,
+                src_port=self._rng.randint(49152, 65535),
+                dst_port=443,
+                protocol="tcp",
+                bytes_sent=tls_overhead + payload,
+                bytes_received=tls_overhead + self._rng.randint(100, 5000),
+                packets_sent=self._rng.randint(3, 12),
+                packets_received=self._rng.randint(3, 15),
+                duration=self._rng.uniform(0.5, 8.0),
+                timestamp=sim_time + i * base_interval + jitter,
+                is_malicious=True,
+                attack_type="encrypted_c2",
+                metadata={
+                    "encryption": "TLS1.3",
+                    "beacon_interval": base_interval,
+                    "c2_server": c2_ip,
+                    "intensity": intensity,
+                },
+            ))
+        return flows
+
+    def _polymorphic_attack(
+        self, sim_time: float, intensity: float,
+        target_id: Optional[str], source_id: Optional[str],
+    ) -> List[TrafficFlow]:
+        """
+        Polymorphic attack — mutates protocol, ports, and payload sizes
+        on every attempt to evade signature-based detection.
+        """
+        src = self._pick_source(source_id)
+        tgt = self._pick_target(target_id, DeviceType.SERVER)
+        num_flows = int(10 + intensity * 50)
+        protocols = ["tcp", "udp"]
+        flows = []
+        for i in range(num_flows):
+            self._flow_counter += 1
+            # Mutate characteristics each attempt
+            proto = self._rng.choice(protocols)
+            port = self._rng.choice([80, 443, 8080, 8443, 3306, 5432, 27017, self._rng.randint(1024, 65535)])
+            # Vary payload sizes significantly (polymorphic mutation)
+            base_size = int(self._np_rng.lognormal(6, 1.5))  # ~400 median, high variance
+            flows.append(TrafficFlow(
+                flow_id=f"ATK{self._flow_counter:08d}",
+                src_ip=src.ip_address,
+                dst_ip=tgt.ip_address,
+                src_port=self._rng.randint(1024, 65535),
+                dst_port=port,
+                protocol=proto,
+                bytes_sent=max(40, base_size),
+                bytes_received=max(0, base_size // self._rng.randint(2, 10)),
+                packets_sent=self._rng.randint(1, 20),
+                packets_received=self._rng.randint(0, 15),
+                duration=self._rng.uniform(0.01, 30.0),
+                timestamp=sim_time + self._rng.random() * 30,
+                is_malicious=True,
+                attack_type="polymorphic_attack",
+                metadata={
+                    "mutation_id": i,
+                    "variant_hash": f"{self._rng.getrandbits(64):016x}",
+                    "intensity": intensity,
+                },
+            ))
+        return flows
+
+    def _slow_exfiltration(
+        self, sim_time: float, intensity: float,
+        target_id: Optional[str], source_id: Optional[str],
+    ) -> List[TrafficFlow]:
+        """
+        Slow-and-low data exfiltration — sub-threshold data leakage
+        spread over many tiny transfers that individually look benign.
+        """
+        src = self._pick_source(source_id, DeviceType.WORKSTATION)
+        ext_ip = f"172.{self._rng.randint(64, 127)}.{self._rng.randint(0, 255)}.{self._rng.randint(1, 254)}"
+        # Many small transfers over extended time
+        num_flows = int(20 + intensity * 100)
+        flows = []
+        for i in range(num_flows):
+            self._flow_counter += 1
+            # Each flow is tiny — below typical alerting thresholds
+            flows.append(TrafficFlow(
+                flow_id=f"ATK{self._flow_counter:08d}",
+                src_ip=src.ip_address,
+                dst_ip=ext_ip,
+                src_port=self._rng.randint(49152, 65535),
+                dst_port=self._rng.choice([443, 80, 53]),
+                protocol="tcp",
+                bytes_sent=self._rng.randint(50, 500),   # deliberately small
+                bytes_received=self._rng.randint(40, 200),
+                packets_sent=self._rng.randint(1, 3),
+                packets_received=self._rng.randint(1, 3),
+                duration=self._rng.uniform(0.1, 2.0),
+                timestamp=sim_time + i * (60.0 / max(num_flows, 1)) * self._rng.uniform(0.8, 1.2),
+                is_malicious=True,
+                attack_type="slow_exfiltration",
+                metadata={
+                    "total_leaked": num_flows * 250,  # estimated total bytes
+                    "stealth_rating": 1.0 - intensity,
+                    "intensity": intensity,
+                },
+            ))
+        return flows
+
+    def _icmp_tunneling(
+        self, sim_time: float, intensity: float,
+        target_id: Optional[str], source_id: Optional[str],
+    ) -> List[TrafficFlow]:
+        """
+        ICMP tunneling — data hidden in echo request/reply payloads.
+
+        Uses ICMP protocol with abnormally large payloads (normal ping
+        is ~64 bytes; tunneling uses 200–1400 bytes).
+        """
+        src = self._pick_source(source_id, DeviceType.WORKSTATION)
+        tunnel_ip = f"198.18.{self._rng.randint(0, 255)}.{self._rng.randint(1, 254)}"
+        num_pings = int(10 + intensity * 100)
+        flows = []
+        for i in range(num_pings):
+            self._flow_counter += 1
+            # Abnormal ICMP payload size (normal is ~64 bytes)
+            payload = self._rng.randint(200, 1400)
+            flows.append(TrafficFlow(
+                flow_id=f"ATK{self._flow_counter:08d}",
+                src_ip=src.ip_address,
+                dst_ip=tunnel_ip,
+                src_port=0,   # ICMP has no ports
+                dst_port=0,
+                protocol="icmp",
+                bytes_sent=payload,
+                bytes_received=payload + self._rng.randint(-50, 50),
+                packets_sent=1,
+                packets_received=1,
+                duration=self._rng.uniform(0.001, 0.5),
+                timestamp=sim_time + i * (60.0 / num_pings),
+                is_malicious=True,
+                attack_type="icmp_tunneling",
+                metadata={
+                    "payload_size": payload,
+                    "tunnel_endpoint": tunnel_ip,
+                    "intensity": intensity,
+                },
+            ))
+        return flows
+
+    def _multi_stage_attack(
+        self, sim_time: float, intensity: float,
+        target_id: Optional[str], source_id: Optional[str],
+    ) -> List[TrafficFlow]:
+        """
+        Multi-stage coordinated attack campaign:
+          Stage 1: Reconnaissance (port scan)
+          Stage 2: Exploitation (lateral movement)
+          Stage 3: Exfiltration (data exfiltration)
+
+        This tests the IDS's ability to correlate events across time.
+        """
+        flows = []
+
+        # Stage 1: Recon (first 20 seconds)
+        recon_flows = self._port_scan(
+            sim_time, intensity * 0.3, target_id, source_id
+        )
+        for f in recon_flows:
+            f.attack_type = "multi_stage_attack"
+            f.metadata["stage"] = "recon"
+        flows.extend(recon_flows[:int(5 + intensity * 20)])  # limit scope
+
+        # Stage 2: Exploitation (20–40 seconds in)
+        exploit_flows = self._lateral_movement(
+            sim_time + 20, intensity * 0.5, target_id, source_id
+        )
+        for f in exploit_flows:
+            f.attack_type = "multi_stage_attack"
+            f.metadata["stage"] = "exploit"
+        flows.extend(exploit_flows[:int(3 + intensity * 10)])
+
+        # Stage 3: Exfiltration (40+ seconds in)
+        exfil_flows = self._data_exfiltration(
+            sim_time + 40, intensity * 0.7, target_id, source_id
+        )
+        for f in exfil_flows:
+            f.attack_type = "multi_stage_attack"
+            f.metadata["stage"] = "exfiltrate"
+        flows.extend(exfil_flows)
+
         return flows
 
     # ── Helpers ──────────────────────────────────────────────────────
